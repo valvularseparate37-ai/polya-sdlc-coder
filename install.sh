@@ -1,254 +1,172 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # install.sh
 # Interactive installation script for polya-sdlc-coder (Linux/macOS)
 
-# Terminal colors
+set -euo pipefail
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-echo -e "${CYAN}=== Polya SDLC Coder - Installer ===${NC}"
+REPO_OWNER='valvularseparate37-ai'
+REPO_NAME='polya-sdlc-coder'
+REPO_GIT_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+REPO_ZIP_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/main.zip"
 
-# 1. Define target directory (default: current directory)
-# Redirect stdin from /dev/tty to allow reading from keyboard when piped via curl
+printf '%b=== Polya SDLC Coder - Installer ===%b\n' "$CYAN" "$NC"
+
 read -p "Enter your target project path (default: .): " TARGET_PATH < /dev/tty
-TARGET_PATH=${TARGET_PATH:-.}
+TARGET_PATH="${TARGET_PATH:-.}"
 
-# Convert to absolute path if possible
-if [ -d "$TARGET_PATH" ]; then
-    TARGET_PATH=$(cd "$TARGET_PATH" && pwd)
-else
-    echo -e "${RED}Error: Target directory '$TARGET_PATH' not found.${NC}"
-    exit 1
+if [[ ! -d "$TARGET_PATH" ]]; then
+  printf '%bError: Target directory '%s' not found.%b\n' "$RED" "$TARGET_PATH" "$NC"
+  exit 1
 fi
 
-echo -e "Target directory: ${YELLOW}$TARGET_PATH${NC}"
+TARGET_PATH="$(cd "$TARGET_PATH" && pwd)"
+printf '%bTarget directory: %s%b\n' "$YELLOW" "$TARGET_PATH" "$NC"
 
-# 2. Create temporary directory to download the repository
-TEMP_DIR=$(mktemp -d -t polya-sdlc-XXXXXX)
-ZIP_FILE="$TEMP_DIR/archive.zip"
-EXTRACT_DIR="$TEMP_DIR/extracted"
-
-# Handler to clean up temporary files on exit
+TEMP_ROOT="$(mktemp -d -t polya-sdlc.XXXXXX)"
 cleanup() {
-    if [ -d "$TEMP_DIR" ]; then
-        echo -e "${CYAN}Cleaning up temporary files...${NC}"
-        rm -rf "$TEMP_DIR"
-    fi
+  rm -rf "$TEMP_ROOT"
 }
 trap cleanup EXIT
 
-# 3. Determine download method (Git Clone or ZIP)
-DOWNLOAD_METHOD=""
+SOURCE_CONTENT_DIR=''
+
 if command -v git >/dev/null 2>&1; then
-    DOWNLOAD_METHOD="git"
-elif command -v unzip >/dev/null 2>&1 && (command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1); then
-    DOWNLOAD_METHOD="zip"
+  printf '%bCloning repository from GitHub (shallow clone)...%b\n' "$CYAN" "$NC"
+  REPO_CLONE_DIR="$TEMP_ROOT/repo"
+  git clone --depth=1 -q "$REPO_GIT_URL" "$REPO_CLONE_DIR"
+  SOURCE_CONTENT_DIR="$REPO_CLONE_DIR"
 else
-    echo -e "${RED}Error: This script requires 'git' or 'unzip' + 'curl'/'wget' to download the repository.${NC}"
+  printf '%bGit not found. Downloading repository ZIP...%b\n' "$YELLOW" "$NC"
+  ZIP_FILE="$TEMP_ROOT/archive.zip"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$REPO_ZIP_URL" -o "$ZIP_FILE"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO "$ZIP_FILE" "$REPO_ZIP_URL"
+  else
+    printf '%bError: This script requires git or curl/wget and unzip to download the repository.%b\n' "$RED" "$NC"
     exit 1
+  fi
+
+  unzip -q "$ZIP_FILE" -d "$TEMP_ROOT"
+  CANDIDATE_DIRS=("$TEMP_ROOT"/*)
+  for candidate in "${CANDIDATE_DIRS[@]}"; do
+    if [[ -d "$candidate" ]] && [[ -d "$candidate/.agents" ]] && [[ -f "$candidate/AGENTS.md" ]]; then
+      SOURCE_CONTENT_DIR="$candidate"
+      break
+    fi
+  done
+
+  if [[ -z "$SOURCE_CONTENT_DIR" ]]; then
+    printf '%bError: Failed to locate the downloaded repository contents.%b\n' "$RED" "$NC"
+    exit 1
+  fi
 fi
 
-SOURCE_CONTENT_DIR=""
-
-if [ "$DOWNLOAD_METHOD" = "git" ]; then
-    echo -e "${CYAN}Cloning repository from GitHub (Shallow Clone)...${NC}"
-    REPO_GIT_URL="https://github.com/GulajavaMinistudio/polya-sdlc-coder.git"
-    git clone --depth=1 -q "$REPO_GIT_URL" "$EXTRACT_DIR"
-    SOURCE_CONTENT_DIR="$EXTRACT_DIR"
-else
-    echo -e "${CYAN}Downloading repository from GitHub (ZIP)...${NC}"
-    REPO_ZIP_URL="https://github.com/GulajavaMinistudio/polya-sdlc-coder/archive/refs/heads/main.zip"
-    
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$REPO_ZIP_URL" -o "$ZIP_FILE"
-    else
-        wget -qO "$ZIP_FILE" "$REPO_ZIP_URL"
-    fi
-    
-    if [ ! -f "$ZIP_FILE" ]; then
-        echo -e "${RED}Error: Failed to download ZIP file from GitHub.${NC}"
-        exit 1
-    fi
-    
-    echo -e "${CYAN}Extracting files...${NC}"
-    mkdir -p "$EXTRACT_DIR"
-    unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
-    if [ -d "$EXTRACT_DIR/polya-sdlc-coder-main" ]; then
-        SOURCE_CONTENT_DIR="$EXTRACT_DIR/polya-sdlc-coder-main"
-    else
-        SOURCE_CONTENT_DIR=$(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)
-    fi
-fi
-
-if [ -z "$SOURCE_CONTENT_DIR" ] || [ ! -d "$SOURCE_CONTENT_DIR" ]; then
-    echo -e "${RED}Error: Failed to find downloaded source directory.${NC}"
-    exit 1
+if [[ ! -d "$SOURCE_CONTENT_DIR/.agents" ]] || [[ ! -f "$SOURCE_CONTENT_DIR/AGENTS.md" ]]; then
+  printf '%bError: Expected .agents folder and AGENTS.md in the downloaded repository.%b\n' "$RED" "$NC"
+  exit 1
 fi
 
 SRC_DIR="$SOURCE_CONTENT_DIR/.agents"
 SRC_AGENTS="$SOURCE_CONTENT_DIR/AGENTS.md"
 
-if [ ! -d "$SRC_DIR" ] || [ ! -f "$SRC_AGENTS" ]; then
-    echo -e "${RED}Error: Expected '.agents' folder or 'AGENTS.md' not found in downloaded repository.${NC}"
-    exit 1
-fi
+printf '%bReady to install: %s%b\n' "$GREEN" "Polya SDLC Coder" "$NC"
 
-echo -e "Ready to install: ${GREEN}Polya SDLC Coder${NC}"
-
-# 4. Interactive menu for platform selection
-echo -e "\n${CYAN}Select the AI Assistant platform you want to install in your project:${NC}"
-echo -e "1) ${GREEN}Standard Platforms${NC} (GitHub Copilot, Antigravity, OpenCode, CommandCode, Codex, Pi, OMP) -> installs to .agents/"
-echo -e "2) ${GREEN}Claude Code${NC} -> installs to .claude/"
-echo -e "3) ${GREEN}Cursor${NC} -> installs to .cursor/"
-echo -e "4) ${GREEN}All Platforms${NC} (Install to .agents/, .claude/, and .cursor/)"
+printf '\n%bSelect the AI Assistant platform you want to install in your project:%b\n' "$CYAN" "$NC"
+printf '1) %bStandard Platforms%b (GitHub Copilot, Antigravity, OpenCode, CommandCode, Codex, Pi, OMP) -> installs to .agents/\n' "$GREEN" "$NC"
+printf '2) %bClaude Code%b -> installs to .claude/\n' "$GREEN" "$NC"
+printf '3) %bCursor%b -> installs to .cursor/\n' "$GREEN" "$NC"
+printf '4) %bAll Platforms%b (Install to .agents/, .claude/, and .cursor/)\n' "$GREEN" "$NC"
 read -p "Enter your platform choice (1-4, default: 1): " CHOICE < /dev/tty
-CHOICE=${CHOICE:-1}
+CHOICE="${CHOICE:-1}"
 
-DEST_DIRS=()
-case $CHOICE in
-    1) DEST_DIRS=(".agents") ;;
-    2) DEST_DIRS=(".claude") ;;
-    3) DEST_DIRS=(".cursor") ;;
-    4) DEST_DIRS=(".agents" ".claude" ".cursor") ;;
-    *) echo -e "${RED}Invalid choice. Process aborted.${NC}"; exit 1 ;;
+case "$CHOICE" in
+  1) DEST_DIRS=(".agents") ;;
+  2) DEST_DIRS=(".claude") ;;
+  3) DEST_DIRS=(".cursor") ;;
+  4) DEST_DIRS=(".agents" ".claude" ".cursor") ;;
+  *)
+    printf '%bInvalid choice. Process aborted.%b\n' "$RED" "$NC"
+    exit 1
+    ;;
 esac
 
-# 6. Copy chosen platform configuration directories
+for DST_DIR_NAME in "${DEST_DIRS[@]}"; do
+  DST_DIR="$TARGET_PATH/$DST_DIR_NAME"
 
-for dst_dir_name in "${DEST_DIRS[@]}"; do
-    DST_DIR="$TARGET_PATH/$dst_dir_name"
-    
-    if [ -d "$SRC_DIR" ]; then
-        RESTORE_LATER=()
-        RESTORE_TARGETS=()
-        RESTORE_MODES=()
-        
-        # If destination directory already exists, check for memory.instructions.md
-        if [ -d "$DST_DIR" ]; then
-            MEMORY_FILES=($(find "$DST_DIR" -name "memory.instructions.md" 2>/dev/null))
-            
-            if [ ${#MEMORY_FILES[@]} -gt 0 ]; then
-                for mem_file in "${MEMORY_FILES[@]}"; do
-                    echo -e "${YELLOW}Found pre-existing memory file: $mem_file${NC}"
-                    read -p "Do you want to: [k]eep the existing file, or [r]eplace it with the template? (K/r): " MEM_CHOICE < /dev/tty
-                    MEM_CHOICE=${MEM_CHOICE:-k}
-                    
-                    TEMP_BAK=$(mktemp)
-                    cp "$mem_file" "$TEMP_BAK"
-                    
-                    if [[ "$MEM_CHOICE" =~ ^[Rr]$ ]]; then
-                        # Replace: Back up to a temporary file, will restore as .bak
-                        RESTORE_LATER+=("$TEMP_BAK")
-                        RESTORE_TARGETS+=("${mem_file}.bak")
-                        RESTORE_MODES+=("Replace")
-                        echo -e "${YELLOW}Will backup your memory file to .bak after folder copy.${NC}"
-                    else
-                        # Keep: Back up to a temporary file to restore after copy
-                        RESTORE_LATER+=("$TEMP_BAK")
-                        RESTORE_TARGETS+=("$mem_file")
-                        RESTORE_MODES+=("Keep")
-                    fi
-                done
-            fi
-            
-            read -p "Folder '$dst_dir_name' already exists in target. Overwrite entire folder? (y/N): " CONFIRM < /dev/tty
-            CONFIRM=${CONFIRM:-n}
-            if [[ "$CONFIRM" =~ ^[Yy]$ ]]; then
-                rm -rf "$DST_DIR"
-            else
-                echo -e "${YELLOW}Skipping copy of '$dst_dir_name'...${NC}"
-                # Clean up temporary backups if copy is skipped
-                for temp_bak in "${RESTORE_LATER[@]}"; do
-                    rm -f "$temp_bak"
-                done
-                continue
-            fi
-        fi
-        
-        # Create destination directory and copy contents
-        mkdir -p "$DST_DIR"
-        cp -a "$SRC_DIR/." "$DST_DIR/"
+  if [[ -d "$DST_DIR" ]]; then
+    printf '%bFolder %s already exists in target. Overwrite entire folder? (y/N): %b' "$YELLOW" "$DST_DIR_NAME" "$NC"
+    read -r CONFIRM < /dev/tty
+    CONFIRM="${CONFIRM:-n}"
 
-        # If destination is not .agents, remove duplicate memory.instructions.md
-        if [ "$dst_dir_name" != ".agents" ]; then
-            rm -f "$DST_DIR/instructions/memory.instructions.md"
-        fi
-
-        echo -e "Successfully copied agents configuration to ${GREEN}$TARGET_PATH/$dst_dir_name${NC}"
-        
-        # Restore kept memory files if any
-        if [ ${#RESTORE_LATER[@]} -gt 0 ]; then
-            for i in "${!RESTORE_LATER[@]}"; do
-                temp_bak="${RESTORE_LATER[$i]}"
-                target_mem="${RESTORE_TARGETS[$i]}"
-                mode="${RESTORE_MODES[$i]:-Keep}"
-                # Re-create parent directory just in case it was deleted
-                mkdir -p "$(dirname "$target_mem")"
-                cp "$temp_bak" "$target_mem"
-                rm -f "$temp_bak"
-                if [ "$mode" = "Replace" ]; then
-                    echo -e "Created backup of existing memory file at: ${GREEN}$target_mem${NC}"
-                else
-                    echo -e "Kept existing memory file: ${GREEN}$target_mem${NC}"
-                fi
-            done
-        fi
-    else
-        echo -e "${RED}Error: Source folder '.agents' not found in source repository.${NC}"
-        exit 1
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+      printf '%bSkipping copy of %s...%b\n' "$YELLOW" "$DST_DIR_NAME" "$NC"
+      continue
     fi
+
+    rm -rf "$DST_DIR"
+  fi
+
+  mkdir -p "$DST_DIR"
+  cp -a "$SRC_DIR/." "$DST_DIR/"
+
+  if [[ "$DST_DIR_NAME" != ".agents" ]]; then
+    rm -f "$DST_DIR/instructions/memory.instructions.md"
+  fi
+
+  printf '%bSuccessfully copied agents configuration to %s%b\n' "$GREEN" "$TARGET_PATH/$DST_DIR_NAME" "$NC"
 done
 
-# 5. Copy AGENTS.md
 DST_AGENTS="$TARGET_PATH/AGENTS.md"
+if [[ -f "$SRC_AGENTS" ]]; then
+  if [[ -f "$DST_AGENTS" ]]; then
+    printf '%bFile AGENTS.md already exists in target.%b\n' "$YELLOW" "$NC"
+    read -p "Do you want to: [k]eep existing, [r]eplace with template, or [m]erge them? (K/r/m): " AGENTS_CHOICE < /dev/tty
+    AGENTS_CHOICE="${AGENTS_CHOICE:-k}"
 
-if [ -f "$SRC_AGENTS" ]; then
-    if [ -f "$DST_AGENTS" ]; then
-        echo -e "${YELLOW}File 'AGENTS.md' already exists in target.${NC}"
-        read -p "Do you want to: [k]eep existing, [r]eplace with template, or [m]erge them? (K/r/m): " AGENTS_CHOICE < /dev/tty
-        AGENTS_CHOICE=${AGENTS_CHOICE:-k}
-        
-        if [[ "$AGENTS_CHOICE" =~ ^[Rr]$ ]]; then
-            # Replace: Back up first, then overwrite
-            cp "$DST_AGENTS" "${DST_AGENTS}.bak"
-            cp "$SRC_AGENTS" "$DST_AGENTS"
-            echo -e "Replaced AGENTS.md. Old version backed up at: ${GREEN}${DST_AGENTS}.bak${NC}"
-        elif [[ "$AGENTS_CHOICE" =~ ^[Mm]$ ]]; then
-            # Merge: Back up first, then update or append template content
-            cp "$DST_AGENTS" "${DST_AGENTS}.bak"
-            
-            # If a previous merged template block exists, strip it out first to update cleanly
-            if grep -Eq "# --- MERGED.*TEMPLATE" "$DST_AGENTS" 2>/dev/null; then
-                TEMP_TRIMMED=$(mktemp)
-                sed '/# --- MERGED.*TEMPLATE/,$d' "$DST_AGENTS" > "$TEMP_TRIMMED"
-                cp "$TEMP_TRIMMED" "$DST_AGENTS"
-                rm -f "$TEMP_TRIMMED"
-                echo -e "${YELLOW}Replacing previous merged template block in AGENTS.md...${NC}"
-            fi
-            
-            echo -e "\n\n# --- MERGED POLYA TEMPLATE (Added on $(date +%Y-%m-%d)) ---\n" >> "$DST_AGENTS"
-            cat "$SRC_AGENTS" >> "$DST_AGENTS"
-            echo -e "Merged new template into existing AGENTS.md. Backup created at: ${GREEN}${DST_AGENTS}.bak${NC}"
-        else
-            echo -e "${YELLOW}Skipping copy of 'AGENTS.md'...${NC}"
+    case "$AGENTS_CHOICE" in
+      [Rr])
+        cp "$DST_AGENTS" "${DST_AGENTS}.bak"
+        cp "$SRC_AGENTS" "$DST_AGENTS"
+        printf '%bReplaced AGENTS.md. Backup created at: %s.bak%b\n' "$GREEN" "$DST_AGENTS" "$NC"
+        ;;
+      [Mm])
+        cp "$DST_AGENTS" "${DST_AGENTS}.bak"
+
+        if grep -Eq '# --- MERGED.*TEMPLATE' "$DST_AGENTS" 2>/dev/null; then
+          TMP_TRIMMED="$(mktemp)"
+          sed '/# --- MERGED.*TEMPLATE/,$d' "$DST_AGENTS" > "$TMP_TRIMMED"
+          cp "$TMP_TRIMMED" "$DST_AGENTS"
+          rm -f "$TMP_TRIMMED"
         fi
-    else
-        # Just copy if it doesn't exist
-        cp "$SRC_AGENTS" "$TARGET_PATH/"
-        echo -e "Successfully copied ${GREEN}AGENTS.md${NC} to $TARGET_PATH/"
-    fi
+
+        printf '\n\n# --- MERGED POLYA TEMPLATE (Added on %s) ---\n\n' "$(date +%F)" >> "$DST_AGENTS"
+        cat "$SRC_AGENTS" >> "$DST_AGENTS"
+        printf '%bMerged new template into AGENTS.md. Backup created at: %s.bak%b\n' "$GREEN" "$DST_AGENTS" "$NC"
+        ;;
+      *)
+        printf '%bSkipping copy of AGENTS.md...%b\n' "$YELLOW" "$NC"
+        ;;
+    esac
+  else
+    cp "$SRC_AGENTS" "$TARGET_PATH/"
+    printf '%bSuccessfully copied AGENTS.md to %s%b\n' "$GREEN" "$TARGET_PATH" "$NC"
+  fi
 else
-    echo -e "${RED}Warning: File 'AGENTS.md' not found in source repository.${NC}"
+  printf '%bWarning: AGENTS.md not found in the source repository.%b\n' "$YELLOW" "$NC"
 fi
 
-echo -e "\n${GREEN}[OK] Installation completed successfully!${NC}"
-echo -e "${YELLOW}[IMPORTANT]: Please review 'AGENTS.md' in your project to:"
-echo -e "1. Customize the project name on the first line so that AI agents can recognize your project context."
-echo -e "2. Change the language preference in the '## Communication' section if necessary.${NC}"
-echo -e "${CYAN}Next Steps with Pólya SDLC:"
-echo -e "- Start by typing '/to-ask-help' for interactive Socratic triage guidance and intent routing."
-echo -e "- Type '/to-explore' to survey and discover problem spaces (Phase 0)."
-echo -e "- In an existing codebase, run '/to-map' to document architecture topography into 'docs/ARCHITECTURE.md'.${NC}\n"
+printf '\n%b[OK] Installation completed successfully!%b\n' "$GREEN" "$NC"
+printf '%b[IMPORTANT]: Please review AGENTS.md in your project to:%b\n' "$YELLOW" "$NC"
+printf '%b1. Customize the project name on the first line so that AI agents can recognize your project context.%b\n' "$YELLOW" "$NC"
+printf '%b2. Change the language preference in the "## Communication" section if necessary.%b\n' "$YELLOW" "$NC"
+printf '%bNext Steps with Pólya SDLC:%b\n' "$CYAN" "$NC"
+printf '%b- Start by typing /to-ask-help for interactive Socratic triage guidance and intent routing.%b\n' "$CYAN" "$NC"
+printf '%b- Type /to-explore to survey and discover problem spaces (Phase 0).%b\n' "$CYAN" "$NC"
+printf '%b- In an existing codebase, run /to-map to document architecture topography into docs/ARCHITECTURE.md.%b\n' "$CYAN" "$NC"
